@@ -369,12 +369,14 @@ void LoadEventPreNexus2::exec() {
     }
   }
 
+  g_log.warning() << "Processing investigration inputs." << "\n";
   processInvestigationInputs();
 
   // Read input files
   prog->report("Loading Pulse ID file");
   this->readPulseidFile(pulseid_filename, throwError);
   prog->report("Loading Event File");
+  g_log.warning() << "About to opening event file " << event_filename << "\n";
   this->openEventFile(event_filename);
 
   // Correct event indexes mased by veto flag
@@ -388,6 +390,7 @@ void LoadEventPreNexus2::exec() {
   }
 
   // Create otuput Workspace
+  g_log.warning() << "About to create output workspaces" << "\n";
   prog->report("Creating output workspace");
   createOutputWorkspace(event_filename);
 
@@ -791,7 +794,7 @@ void LoadEventPreNexus2::procEvents(
       }
     }
 
-    g_log.information()
+    g_log.warning()
         << tim << " to create " << partWorkspaces.size()
         << " workspaces (same as number of threads) for parallel loading "
         << numBlocks << " blocks. "
@@ -998,6 +1001,10 @@ void LoadEventPreNexus2::procEventsLinear(
   // process the individual events
   std::stringstream dbss;
   // size_t numwrongpid = 0;
+
+  size_t wrong_pixel_counter = 0;
+  size_t max_output_wrong_pixels = 1000;
+
   for (size_t i = 0; i < current_event_buffer_size; i++) {
     DasEvent &temp = *(event_buffer + i);
     PixelType pid = temp.pid;
@@ -1029,6 +1036,17 @@ void LoadEventPreNexus2::procEventsLinear(
       local_num_error_events++;
       local_num_wrongdetid_events++;
       local_wrongdetids.insert(pid);
+
+      if (wrong_pixel_counter < max_output_wrong_pixels)
+      {
+          g_log.warning() << "Wrong pixel ID " << pid << "\n";
+          ++ wrong_pixel_counter;
+      }
+      else
+      {
+          throw std::runtime_error("Debug stop for wrong pixel IDs");
+      }
+
     }
 
     // Now check if this pid we want to load.

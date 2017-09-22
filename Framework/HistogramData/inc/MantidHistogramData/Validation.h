@@ -5,6 +5,7 @@
 #include <cfloat>
 #include <cmath>
 #include <stdexcept>
+#include <iostream>
 
 namespace Mantid {
 namespace HistogramData {
@@ -46,12 +47,21 @@ template <class T> bool Validator<HistogramX>::isValid(const T &data) {
     double delta = *(it + 1) - *it;
     // Not 0.0, not denormal
     if (delta < DBL_MIN)
+    {
+        std::cout << "Delta is less than DBL_MIN of size " << data.size() << "\n";
       return false;
+    }
   }
   ++it;
   // after first NAN everything must be NAN
-  return std::find_if_not(it, data.end(), static_cast<bool (*)(double)>(
+
+
+  bool has_no_nan = std::find_if_not(it, data.end(), static_cast<bool (*)(double)>(
                                               std::isnan)) == data.end();
+  if (!has_no_nan)
+      std::cout << "Containing NAN." << "\n";
+
+  return has_no_nan;
 }
 
 template <class T> void Validator<HistogramX>::checkValidity(const T &data) {
