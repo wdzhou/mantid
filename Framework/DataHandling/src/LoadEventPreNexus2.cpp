@@ -327,6 +327,14 @@ void LoadEventPreNexus2::init() {
   setPropertyGroup("DBOutputBlockNumber", dbgrp);
   setPropertyGroup("DBNumberOutputEvents", dbgrp);
   setPropertyGroup("DBNumberOutputPulses", dbgrp);
+
+  declareProperty("BlockNumberForLog", 0, "Index of block to investigate");
+  declareProperty("EventRangeForLog", 0,
+                  "Range of events in a block for investigating logs");
+
+  std::string loggrp = "Investigate Event-based Sample Logs";
+  setPropertyGroup("BlockNumberForLog", loggrp);
+  setPropertyGroup("EventRangeForLog", loggrp);
 }
 
 //----------------------------------------------------------------------------------------------
@@ -841,6 +849,13 @@ void LoadEventPreNexus2::procEvents(
 
       // This processes the events. Can be done in parallel!
       bool dbprint = m_dbOutput && (blockNum == m_dbOpBlockNumber);
+
+      // sample log
+      if (blockNum == m_logBlockNumber)
+        dbprint = true;
+
+      //  g_log.notice() << "Block " << blockNum << " output = " << dbprint <<
+      //  "\n";
       procEventsLinear(ws, theseEventVectors, event_buffer,
                        current_event_buffer_size, fileOffset, dbprint);
 
@@ -1003,12 +1018,17 @@ void LoadEventPreNexus2::procEventsLinear(
   // size_t numwrongpid = 0;
 
   size_t wrong_pixel_counter = 0;
-  size_t max_output_wrong_pixels = 1000;
+  // TODO/ISSUE/NOW - Make it flexible!
+  size_t max_output_wrong_pixels = 2000;
 
   for (size_t i = 0; i < current_event_buffer_size; i++) {
     DasEvent &temp = *(event_buffer + i);
     PixelType pid = temp.pid;
     bool iswrongdetid = false;
+
+    // TODO/ISSUE/NOW - Make the output a more serious approach to output the
+    // data
+    // Especially to a workspace!
 
     if (dbprint && i < m_dbOpNumEvents)
       dbss << i << " \t" << temp.tof << " \t" << temp.pid << "\n";
@@ -1037,14 +1057,12 @@ void LoadEventPreNexus2::procEventsLinear(
       local_num_wrongdetid_events++;
       local_wrongdetids.insert(pid);
 
-      if (wrong_pixel_counter < max_output_wrong_pixels)
-      {
-          g_log.warning() << "Wrong pixel ID " << pid << "\n";
-          ++ wrong_pixel_counter;
-      }
-      else
-      {
-          throw std::runtime_error("Debug stop for wrong pixel IDs");
+      if (dbprint && wrong_pixel_counter < max_output_wrong_pixels &&
+          pid > 1610780000) {
+        g_log.information() << "Log ID " << pid << "\n";
+        ++wrong_pixel_counter;
+      } else if (dbprint) {
+        throw std::runtime_error("Debug stop for wrong pixel IDs");
       }
 
     }
@@ -1126,6 +1144,12 @@ void LoadEventPreNexus2::procEventsLinear(
       // int64_t abstime = (pulsetime.totalNanoseconds()+int64_t(tof*1000));
       local_pulsetimes[theindex].push_back(pulsetime);
       local_tofs[theindex].push_back(tof);
+
+      if (dbprint) {
+        int64_t abstime =
+            pulsetime.totalNanoseconds() + static_cast<int64_t>(tof * 1000);
+        g_log.warning() << "LogTime  " << abstime << "\n";
+      }
 
     } // END-IF-ELSE: On Event's Pixel's Nature
 
@@ -1394,6 +1418,12 @@ void LoadEventPreNexus2::processInvestigationInputs() {
     m_dbOpNumPulses = static_cast<size_t>(dbnumpulses);
   else
     m_dbOpNumPulses = 0;
+
+  // about the investigation of sample logs
+  m_logBlockNumber = getProperty("BlockNumberForLog");
+  int outputLogRange = getProperty("EventRangeForLog");
+
+  return;
 }
 
 } // namespace DataHandling

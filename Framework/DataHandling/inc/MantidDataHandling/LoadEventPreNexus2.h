@@ -193,6 +193,9 @@ private:
   size_t m_dbOpNumEvents;
   size_t m_dbOpNumPulses;
 
+  /// about sample logs
+  int m_logBlockNumber;
+
   void loadPixelMap(const std::string &filename);
 
   void openEventFile(const std::string &filename);
