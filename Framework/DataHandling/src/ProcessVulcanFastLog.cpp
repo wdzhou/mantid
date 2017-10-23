@@ -1,6 +1,5 @@
-#include "MantidDataHandling/LoadEventPreNexus2.h"
+#include "MantidDataHandling/ProcessVulcanFastLog.h"
 #include "MantidAPI/Axis.h"
-#include "MantidGeometry/Instrument/DetectorInfo.h"
 #include "MantidAPI/FileFinder.h"
 #include "MantidAPI/FileProperty.h"
 #include "MantidAPI/RegisterFileLoader.h"
@@ -11,6 +10,7 @@
 #include "MantidDataObjects/Workspace2D.h"
 #include "MantidGeometry/IDetector.h"
 #include "MantidGeometry/Instrument.h"
+#include "MantidGeometry/Instrument/DetectorInfo.h"
 #include "MantidKernel/ArrayProperty.h"
 #include "MantidKernel/BinaryFile.h"
 #include "MantidKernel/BoundedValidator.h"
@@ -39,10 +39,12 @@
 #include <Poco/File.h>
 #include <Poco/Path.h>
 
+#include <H5Cpp.h>
+
 namespace Mantid {
 namespace DataHandling {
 
-DECLARE_FILELOADER_ALGORITHM(LoadEventPreNexus2)
+DECLARE_FILELOADER_ALGORITHM(ProcessVulcanFastLog)
 
 using namespace Kernel;
 using namespace API;
@@ -62,9 +64,9 @@ using std::stringstream;
 using std::string;
 using std::vector;
 
-//------------------------------------------------------------------------------------------------
-// constants for locating the parameters to use in execution
-//------------------------------------------------------------------------------------------------
+////------------------------------------------------------------------------------------------------
+//// constants for locating the parameters to use in execution
+////------------------------------------------------------------------------------------------------
 static const string EVENT_PARAM("EventFilename");
 static const string PULSEID_PARAM("PulseidFilename");
 static const string MAP_PARAM("MappingFilename");
@@ -93,13 +95,14 @@ static const string PULSE_EXTS[] = {
     "_pulseid3.dat", "_pulseid4.dat", "_live_pulseid.dat"};
 static const int NUM_EXT = 7;
 
-//-----------------------------------------------------------------------------
-// Statistic Functions
-//-----------------------------------------------------------------------------
+////-----------------------------------------------------------------------------
+//// Statistic Functions
+////-----------------------------------------------------------------------------
 
-//----------------------------------------------------------------------------------------------
-/** Parse preNexus file name to get run number
-  */
+////----------------------------------------------------------------------------------------------
+///** Parse preNexus file name to get run number
+//  */
+// static string getRunnumber(const string &filename);
 static string getRunnumber(const string &filename) {
   // start by trimming the filename
   string runnumber(Poco::Path(filename).getBaseName());
@@ -113,9 +116,10 @@ static string getRunnumber(const string &filename) {
   return runnumber.substr(left + 1, right - left - 1);
 }
 
-//----------------------------------------------------------------------------------------------
-/** Generate Pulse ID file name from preNexus event file's name
-  */
+////----------------------------------------------------------------------------------------------
+///** Generate Pulse ID file name from preNexus event file's name
+//  */
+// static string generatePulseidName(string eventfile);
 static string generatePulseidName(string eventfile) {
   // initialize vector of endings and put live at the beginning
   vector<string> eventExts(EVENT_EXTS, EVENT_EXTS + NUM_EXT);
@@ -134,9 +138,10 @@ static string generatePulseidName(string eventfile) {
   return "";
 }
 
-//----------------------------------------------------------------------------------------------
-/** Generate mapping file name from Event workspace's instrument
-  */
+////----------------------------------------------------------------------------------------------
+///** Generate mapping file name from Event workspace's instrument
+//  */
+// static string generateMappingfileName(EventWorkspace_sptr &wksp);
 static string generateMappingfileName(EventWorkspace_sptr &wksp) {
   // get the name of the mapping file as set in the parameter files
   std::vector<string> temp =
@@ -201,7 +206,7 @@ static string generateMappingfileName(EventWorkspace_sptr &wksp) {
  * not
  * be used
  */
-int LoadEventPreNexus2::confidence(Kernel::FileDescriptor &descriptor) const {
+int ProcessVulcanFastLog::confidence(Kernel::FileDescriptor &descriptor) const {
   if (descriptor.extension().rfind("dat") == std::string::npos)
     return 0;
 
@@ -228,7 +233,7 @@ int LoadEventPreNexus2::confidence(Kernel::FileDescriptor &descriptor) const {
 //----------------------------------------------------------------------------------------------
 /** Constructor
  */
-LoadEventPreNexus2::LoadEventPreNexus2()
+ProcessVulcanFastLog::ProcessVulcanFastLog()
     : Mantid::API::IFileLoader<Kernel::FileDescriptor>(), prog(nullptr),
       spectra_list(), pulsetimes(), event_indices(), proton_charge(),
       proton_charge_tot(0), pixel_to_wkspindex(), pixelmap(), detid_max(),
@@ -243,12 +248,12 @@ LoadEventPreNexus2::LoadEventPreNexus2()
 //----------------------------------------------------------------------------------------------
 /** Desctructor
  */
-LoadEventPreNexus2::~LoadEventPreNexus2() { delete this->eventfile; }
+ProcessVulcanFastLog::~ProcessVulcanFastLog() { delete this->eventfile; }
 
 //----------------------------------------------------------------------------------------------
 /** Initialize the algorithm, i.e, declare properties
 */
-void LoadEventPreNexus2::init() {
+void ProcessVulcanFastLog::init() {
   // which files to use
   vector<string> eventExts(EVENT_EXTS, EVENT_EXTS + NUM_EXT);
   declareProperty(
@@ -297,23 +302,32 @@ void LoadEventPreNexus2::init() {
                   "  Serial: Use a single core.\n"
                   "  Parallel: Use all available cores.");
 
+  // Group of properties for FAST LOG --------------------------------------
   // the output workspace name
-  declareProperty(Kernel::make_unique<WorkspaceProperty<IEventWorkspace>>(
-                      OUT_PARAM, "", Direction::Output),
-                  "The name of the workspace that will be created, filled "
-                  "with the read-in "
-                  "data and stored in the [[Analysis Data Service]].");
+  declareProperty("MinimumPixelID", EMPTY_INT(), mustBePositive,
+                  "Minmum pixel IDs for the sample log to export.");
 
-  declareProperty(Kernel::make_unique<WorkspaceProperty<MatrixWorkspace>>(
-                      "EventNumberWorkspace", "", Direction::Output,
-                      PropertyMode::Optional),
-                  "Workspace with number of events per pulse");
+  declareProperty("MaximumPixelID", EMPTY_INT(), mustBePositive,
+                  "Maximum pixel IDs for the sample log to export.");
 
-  // Some debugging options
+  declareProperty(
+      Kernel::make_unique<WorkspaceProperty<MatrixWorkspace>>(
+          OUT_PARAM, "", Direction::Output),
+      "The name of the workspace that contains the fast sample log.");
+
   auto mustBeNonNegative = boost::make_shared<BoundedValidator<int>>();
   mustBeNonNegative->setLower(0);
-  declareProperty("DBOutputBlockNumber", EMPTY_INT(), mustBeNonNegative,
+  declareProperty("DBOutputBlockNumber", EMPTY_INT(), mustBePositive,
                   "Index of the loading block for debugging output. ");
+
+  std::string fastloggrp("Fast Sample Log To Invtestigate");
+  setPropertyGroup("MinimumPixelID", fastloggrp);
+  setPropertyGroup("MaximumPixelID", fastloggrp);
+  setPropertyGroup(OUT_PARAM, fastloggrp);
+  setPropertyGroup("DBOutputBlockNumber", fastloggrp);
+  //------------------------------------------------------------------------
+
+  // Some debugging options
 
   declareProperty("DBNumberOutputEvents", 40, mustBePositive,
                   "Number of output events for debugging purpose.  Must be "
@@ -323,8 +337,7 @@ void LoadEventPreNexus2::init() {
                   "Number of output pulses for debugging purpose. ");
 
   std::string dbgrp = "Investigation Use";
-  setPropertyGroup("EventNumberWorkspace", dbgrp);
-  setPropertyGroup("DBOutputBlockNumber", dbgrp);
+
   setPropertyGroup("DBNumberOutputEvents", dbgrp);
   setPropertyGroup("DBNumberOutputPulses", dbgrp);
 
@@ -345,8 +358,11 @@ void LoadEventPreNexus2::init() {
   * 3. process events
   * 4. set out output
   */
-void LoadEventPreNexus2::exec() {
-  g_log.information("Executing LoadEventPreNexus Ver 2.0");
+void ProcessVulcanFastLog::exec() {
+  g_log.information("Executing Process Vulcan Fast Log");
+
+  // test writing H5 file
+  exportTimeSeriesH5("/tmp/test.h5", 50);
 
   // Process input properties
   // a. Check 'chunk' properties are valid, if set
@@ -377,7 +393,8 @@ void LoadEventPreNexus2::exec() {
     }
   }
 
-  g_log.warning() << "Processing investigration inputs." << "\n";
+  g_log.warning() << "Processing investigration inputs."
+                  << "\n";
   processInvestigationInputs();
 
   // Read input files
@@ -390,15 +407,9 @@ void LoadEventPreNexus2::exec() {
   // Correct event indexes mased by veto flag
   unmaskVetoEventIndex();
 
-  // Optinally output event number / pulse file
-  std::string diswsname = getPropertyValue("EventNumberWorkspace");
-  if (!diswsname.empty()) {
-    MatrixWorkspace_sptr disws = generateEventDistribtionWorkspace();
-    setProperty("EventNumberWorkspace", disws);
-  }
-
   // Create otuput Workspace
-  g_log.warning() << "About to create output workspaces" << "\n";
+  g_log.warning() << "About to create output workspaces"
+                  << "\n";
   prog->report("Creating output workspace");
   createOutputWorkspace(event_filename);
 
@@ -416,8 +427,13 @@ void LoadEventPreNexus2::exec() {
 //------------------------------------------------------------------------------------------------
 /** Create and set up output Event Workspace
   */
-void LoadEventPreNexus2::createOutputWorkspace(
+void ProcessVulcanFastLog::createOutputWorkspace(
     const std::string event_filename) {
+
+  // TODO/NOW/ISSUE/ -- create vector
+  std::vector<std::vector<std::pair<int64_t, size_t>>>
+      m_signalBlockVector; // blocks and entries
+
   // Create the output workspace
   localWorkspace = EventWorkspace_sptr(new EventWorkspace());
 
@@ -476,7 +492,7 @@ void LoadEventPreNexus2::createOutputWorkspace(
 //------------------------------------------------------------------------------------------------
 /** Some Pulse ID and event indexes might be wrong.  Remove them.
   */
-void LoadEventPreNexus2::unmaskVetoEventIndex() {
+void ProcessVulcanFastLog::unmaskVetoEventIndex() {
   // Unmask veto bit from vetoed events
 
   PARALLEL_FOR_NO_WSP_CHECK()
@@ -509,7 +525,7 @@ void LoadEventPreNexus2::unmaskVetoEventIndex() {
   * specrum 1 is the accumulated number of events
   */
 API::MatrixWorkspace_sptr
-LoadEventPreNexus2::generateEventDistribtionWorkspace() {
+ProcessVulcanFastLog::generateEventDistribtionWorkspace() {
   // Generate workspace of 2 spectrum
   size_t nspec = 2;
   size_t sizex = event_indices.size();
@@ -549,7 +565,7 @@ LoadEventPreNexus2::generateEventDistribtionWorkspace() {
 //----------------------------------------------------------------------------------------------
 /** Process imbed logs (marked by bad pixel IDs)
  */
-void LoadEventPreNexus2::processImbedLogs() {
+void ProcessVulcanFastLog::processImbedLogs() {
   for (const auto pid : this->wrongdetids) {
     // a. pixel ID -> index
     const auto mit = this->wrongdetidmap.find(pid);
@@ -582,8 +598,8 @@ void LoadEventPreNexus2::processImbedLogs() {
   * @param mindex :: index of the log in pulse time ...
   * - mindex:  index of the the series in the list
   */
-void LoadEventPreNexus2::addToWorkspaceLog(std::string logtitle,
-                                           size_t mindex) {
+void ProcessVulcanFastLog::addToWorkspaceLog(std::string logtitle,
+                                             size_t mindex) {
   // Create TimeSeriesProperty
   auto property = new TimeSeriesProperty<double>(logtitle);
 
@@ -612,7 +628,7 @@ void LoadEventPreNexus2::addToWorkspaceLog(std::string logtitle,
  *  @param localWorkspace :: MatrixWorkspace in which to put the instrument
  * geometry
  */
-void LoadEventPreNexus2::runLoadInstrument(
+void ProcessVulcanFastLog::runLoadInstrument(
     const std::string &eventfilename, MatrixWorkspace_sptr localWorkspace) {
   // start by getting just the filename
   string instrument = Poco::Path(eventfilename).getFileName();
@@ -653,8 +669,8 @@ void LoadEventPreNexus2::runLoadInstrument(
 /** Turn a pixel id into a "corrected" pixelid and period.
   *
   */
-inline void LoadEventPreNexus2::fixPixelId(PixelType &pixel,
-                                           uint32_t &period) const {
+inline void ProcessVulcanFastLog::fixPixelId(PixelType &pixel,
+                                             uint32_t &period) const {
   if (!this->using_mapping_file) { // nothing to do here
     period = 0;
     return;
@@ -669,7 +685,7 @@ inline void LoadEventPreNexus2::fixPixelId(PixelType &pixel,
 /** Process the event file properly in parallel
   * @param workspace :: EventWorkspace to write to.
   */
-void LoadEventPreNexus2::procEvents(
+void ProcessVulcanFastLog::procEvents(
     DataObjects::EventWorkspace_sptr &workspace) {
   //-------------------------------------------------------------------------
   // Initialize statistic counters
@@ -686,6 +702,9 @@ void LoadEventPreNexus2::procEvents(
   // Set up loading parameters
   size_t loadBlockSize = Mantid::Kernel::DEFAULT_BLOCK_SIZE * 2;
   size_t numBlocks = (max_events + loadBlockSize - 1) / loadBlockSize;
+
+  m_timeBlockVector.resize(numBlocks);
+  m_valueBlockVector.resize(numBlocks);
 
   // We want to pad out empty pixels.
   const auto &detectorInfo = workspace->detectorInfo();
@@ -842,7 +861,7 @@ void LoadEventPreNexus2::procEvents(
               : loadBlockSize;
 
       // Load this chunk of event data (critical block)
-      PARALLEL_CRITICAL(LoadEventPreNexus2_fileAccess) {
+      PARALLEL_CRITICAL(ProcessVulcanFastLog_fileAccess) {
         current_event_buffer_size = eventfile->loadBlockAt(
             event_buffer, fileOffset, current_event_buffer_size);
       }
@@ -851,13 +870,22 @@ void LoadEventPreNexus2::procEvents(
       bool dbprint = m_dbOutput && (blockNum == m_dbOpBlockNumber);
 
       // sample log
-      if (blockNum == m_logBlockNumber)
+      if (blockNum == m_logBlockNumber) {
         dbprint = true;
+        g_log.notice() << "Block " << blockNum << " output = " << dbprint
+                       << "\n";
+      }
 
-      //  g_log.notice() << "Block " << blockNum << " output = " << dbprint <<
-      //  "\n";
+      std::vector<Kernel::DateAndTime> log_time_vector;
+      std::vector<int64_t> log_value_vector;
+
+      // THIS IS THE CORE METHOD TO PROCESS EVENTS
       procEventsLinear(ws, theseEventVectors, event_buffer,
-                       current_event_buffer_size, fileOffset, dbprint);
+                       current_event_buffer_size, fileOffset, log_time_vector,
+                       log_value_vector, dbprint);
+
+      m_timeBlockVector[blockNum] = log_time_vector;
+      m_valueBlockVector[blockNum] = log_value_vector;
 
       // Report progress
       prog->report("Load Event PreNeXus");
@@ -983,10 +1011,12 @@ void LoadEventPreNexus2::procEvents(
   * @param fileOffset :: Value for an offset into the binary file
   * @param dbprint :: flag to print out events information
   */
-void LoadEventPreNexus2::procEventsLinear(
+void ProcessVulcanFastLog::procEventsLinear(
     DataObjects::EventWorkspace_sptr & /*workspace*/,
     std::vector<TofEvent> **arrayOfVectors, DasEvent *event_buffer,
-    size_t current_event_buffer_size, size_t fileOffset, bool dbprint) {
+    size_t current_event_buffer_size, size_t fileOffset,
+    std::vector<Kernel::DateAndTime> &log_time_vector,
+    std::vector<int64_t> &log_value_vector, bool dbprint) {
   // Starting pulse time
   DateAndTime pulsetime;
   int64_t pulse_i = 0;
@@ -1021,17 +1051,17 @@ void LoadEventPreNexus2::procEventsLinear(
   // TODO/ISSUE/NOW - Make it flexible!
   size_t max_output_wrong_pixels = 2000;
 
+  // TODO/ISSUE/NOW - Put it to some other more appropriate places
+  // FAST-LOG-FLAG
+  int max_pixel_id_i = getProperty("MaximumPixelID");
+  if (isEmpty(max_pixel_id_i))
+    max_pixel_id_i = 1610730000;
+  m_maxLogPixelID = static_cast<size_t>(max_pixel_id_i);
+
+  size_t num_signal_block = 0; // number of signal counts in a block
   for (size_t i = 0; i < current_event_buffer_size; i++) {
     DasEvent &temp = *(event_buffer + i);
     PixelType pid = temp.pid;
-    bool iswrongdetid = false;
-
-    // TODO/ISSUE/NOW - Make the output a more serious approach to output the
-    // data
-    // Especially to a workspace!
-
-    if (dbprint && i < m_dbOpNumEvents)
-      dbss << i << " \t" << temp.tof << " \t" << temp.pid << "\n";
 
     // Filter out bad event
     if ((pid & ERROR_PID) == ERROR_PID) {
@@ -1040,36 +1070,56 @@ void LoadEventPreNexus2::procEventsLinear(
       continue;
     }
 
-    // Covert the pixel ID from DAS pixel to our pixel ID
-    // downstream monitor pixel for SNAP
-    if (pid == 1073741843)
-      pid = 1179648;
-    else if (this->using_mapping_file) {
-      PixelType unmapped_pid = pid % this->numpixel;
-      pid = this->pixelmap[unmapped_pid];
+    // I don' think that the following codes are needed in this case
+    if (false) {
+      // Covert the pixel ID from DAS pixel to our pixel ID
+      if (pid == 1073741843) {
+        // convert a special PID to another special
+        // downstream monitor pixel for SNAP
+        pid = 1179648;
+      } else if (this->using_mapping_file) {
+        // using map file ... not used at all!
+        PixelType unmapped_pid = pid % this->numpixel;
+        pid = this->pixelmap[unmapped_pid];
+      }
     }
 
-    // Wrong pixel IDs
+    bool islog(false);
+    bool iswrongdetid(false);
+
+    // Sample log ID or WRONG ID Wrong pixel IDs
     if (pid > static_cast<PixelType>(detid_max)) {
-      iswrongdetid = true;
+      // PID is not detector: 2 cases (special event log interested or wrong!)
 
-      local_num_error_events++;
-      local_num_wrongdetid_events++;
-      local_wrongdetids.insert(pid);
+      if (pid >= static_cast<PixelType>(m_minLogPixelID) &&
+          pid <= static_cast<PixelType>(m_maxLogPixelID)) {
+        islog = true;
+        ++num_signal_block;
+      } else {
+        iswrongdetid = true;
 
-      if (dbprint && wrong_pixel_counter < max_output_wrong_pixels &&
-          pid < 1610730000) { //  #           pid > 1610780000
+        local_num_error_events++;
+        local_num_wrongdetid_events++;
+        local_wrongdetids.insert(pid);
+      }
+
+      // some debug output
+      // TODO/ISSUE/NOW... RESUME FROM HERE!
+      ...... blabla
+
+          if (dbprint && wrong_pixel_counter < max_output_wrong_pixels &&
+              pid < m_maxLogPixelID) { //  #           pid > 1610780000
         g_log.warning() << "Log ID " << pid << "\n";
         ++wrong_pixel_counter;
-      } else if (dbprint && wrong_pixel_counter >= max_output_wrong_pixels) {
+      }
+      else if (dbprint && wrong_pixel_counter >= max_output_wrong_pixels) {
         std::stringstream err_msg;
         err_msg << "Debug stop for understanding event-based sample logs.  "
                    "Wrong Pixel counter = "
                 << wrong_pixel_counter;
         throw std::runtime_error(err_msg.str());
       }
-
-    }
+    } // PID
 
     // Now check if this pid we want to load.
     if (loadOnlySomeSpectra && !iswrongdetid) {
@@ -1159,11 +1209,15 @@ void LoadEventPreNexus2::procEventsLinear(
 
   } // ENDFOR each event
 
-  if (dbprint)
+  if (dbprint) {
     g_log.information(dbss.str());
+    g_log.notice() << "Number of signal counts = " << num_signal_block
+                   << " in selected block."
+                   << "\n";
+  }
 
   // Update local statistics to their global counterparts
-  PARALLEL_CRITICAL(LoadEventPreNexus2_global_statistics) {
+  PARALLEL_CRITICAL(ProcessVulcanFastLog_global_statistics) {
     this->num_good_events += local_num_good_events;
     this->num_ignored_events += local_num_ignored_events;
     this->num_error_events += local_num_error_events;
@@ -1215,11 +1269,11 @@ void LoadEventPreNexus2::procEventsLinear(
 }
 
 //----------------------------------------------------------------------------------------------
-/** Comparator for sorting dasevent lists
-  */
-bool vzintermediatePixelIDComp(IntermediateEvent x, IntermediateEvent y) {
-  return (x.pid < y.pid);
-}
+///** Comparator for sorting dasevent lists
+//  */
+// bool vzintermediatePixelIDComp(IntermediateEvent x, IntermediateEvent y) {
+//  return (x.pid < y.pid);
+//}
 
 //-----------------------------------------------------------------------------
 /**
@@ -1230,7 +1284,7 @@ bool vzintermediatePixelIDComp(IntermediateEvent x, IntermediateEvent y) {
   *
   * @param workspace :: Event workspace to set the proton charge on
   */
-void LoadEventPreNexus2::setProtonCharge(
+void ProcessVulcanFastLog::setProtonCharge(
     DataObjects::EventWorkspace_sptr &workspace) {
   if (this->proton_charge.empty()) // nothing to do
     return;
@@ -1259,7 +1313,7 @@ void LoadEventPreNexus2::setProtonCharge(
 /** Load a pixel mapping file
   * @param filename :: Path to file.
   */
-void LoadEventPreNexus2::loadPixelMap(const std::string &filename) {
+void ProcessVulcanFastLog::loadPixelMap(const std::string &filename) {
   this->using_mapping_file = false;
 
   // check that there is a mapping file
@@ -1300,7 +1354,7 @@ void LoadEventPreNexus2::loadPixelMap(const std::string &filename) {
 /** Open an event file
   * @param filename :: file to open.
   */
-void LoadEventPreNexus2::openEventFile(const std::string &filename) {
+void ProcessVulcanFastLog::openEventFile(const std::string &filename) {
   // Open the file
   eventfile = new BinaryFile<DasEvent>(filename);
   num_events = eventfile->getNumElements();
@@ -1330,8 +1384,8 @@ void LoadEventPreNexus2::openEventFile(const std::string &filename) {
  * @param filename :: file to load.
  * @param throwError :: Flag to trigger error throwing instead of just logging
  */
-void LoadEventPreNexus2::readPulseidFile(const std::string &filename,
-                                         const bool throwError) {
+void ProcessVulcanFastLog::readPulseidFile(const std::string &filename,
+                                           const bool throwError) {
   this->proton_charge_tot = 0.;
   this->num_pulses = 0;
   this->pulsetimesincreasing = true;
@@ -1405,7 +1459,7 @@ void LoadEventPreNexus2::readPulseidFile(const std::string &filename,
 //----------------------------------------------------------------------------------------------
 /** Process input properties for purpose of investigation
   */
-void LoadEventPreNexus2::processInvestigationInputs() {
+void ProcessVulcanFastLog::processInvestigationInputs() {
   m_dbOpBlockNumber = getProperty("DBOutputBlockNumber");
   if (isEmpty(m_dbOpBlockNumber)) {
     m_dbOutput = false;
@@ -1426,6 +1480,298 @@ void LoadEventPreNexus2::processInvestigationInputs() {
   // about the investigation of sample logs
   m_logBlockNumber = getProperty("BlockNumberForLog");
   int outputLogRange = getProperty("EventRangeForLog");
+
+  return;
+}
+
+using namespace H5;
+
+//----------------------------------------------------------------------------------------------
+/**
+ * @brief ProcessVulcanFastLog::exportTimeSeriesH5
+ * @param h5name
+ */
+void ProcessVulcanFastLog::exportTimeSeriesH5_1D(
+    const std::__cxx11::string &h5name) {
+
+  // new and file
+  H5::H5File *file = new H5::H5File(h5name, H5F_ACC_TRUNC);
+
+  // create property list for a dataset and set up fill values
+  int fillvalue = 0;
+  H5::DSetCreatPropList plist;
+  plist.setFillValue(H5::PredType::NATIVE_INT, &fillvalue);
+
+  // create dataspace for the dataset in the file
+  const int FSPACE_DIM1 =
+      100; // Dimension sizes of the dataset as it is @ number of rows
+  const int FSPACE_DIM2 = 10; //  stored in the file @ number of columns
+
+H5:
+  hsize_t fdim[] = {FSPACE_DIM1, FSPACE_DIM2}; // dim sizes of ds (on disk)
+
+  const int FSPACE_RANK =
+      2; // Dataset rank as it is stored in the file RANK2 = 2D
+
+  // ***
+  DataSpace fspace(FSPACE_RANK, fdim);
+
+  // IS THIS PART NECESSARY?
+  /*
+   * Select hyperslab for the dataset in the file, using 3x2 blocks,
+   * (4,3) stride and (2,4) count starting at the position (0,1).
+   */
+  hsize_t start[2];  // Start of hyperslab
+  hsize_t stride[2]; // Stride of hyperslab
+  hsize_t count[2];  // Block count
+  hsize_t block[2];  // Block sizes
+  start[0] = 0;
+  start[1] = 0;
+  stride[0] = 1;
+  stride[1] = 3;
+  count[0] = 16;
+  count[1] = 1;
+  block[0] = 1;
+  block[1] = 3;
+  fspace.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // Create dataspace for the first dataset.
+  const int MSPACE_DIM1 = 8; // We will read dataset back from the file
+
+  const int MSPACE1_RANK = 1; // Rank of the first dataset in memory
+  const int MSPACE1_DIM = 50; // Dataset size in memory
+  hsize_t dim1[] = {
+      MSPACE1_DIM}; // Dimension size of the first dataset (in memory) */
+  DataSpace mspace1(MSPACE1_RANK, dim1);
+
+  const int MSPACE_RANK = 2; // Rank of the first dataset in memory
+
+  // Select hyperslab.
+  // We will use 48 elements of the vector buffer starting at the
+  // second element.  Selected elements are 1 2 3 . . . 48
+  start[0] = 0;
+  stride[0] = 1;
+  count[0] = 48;
+  block[0] = 1;
+  mspace1.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // write file
+  int vector[MSPACE1_DIM]; // vector buffer for dset
+  int matrix[2][2];
+  /*
+   * Buffer initialization.
+   */
+  vector[0] = vector[MSPACE1_DIM - 1] = -1;
+  for (int i = 1; i < MSPACE1_DIM - 1; i++)
+    vector[i] = i;
+
+  // Create dataset and write it into the file.
+  const H5std_string DATASET_NAME("Matrix in file");
+  DataSet *dataset = new DataSet(
+      file->createDataSet(DATASET_NAME, PredType::NATIVE_INT, fspace, plist));
+  dataset->write(vector, PredType::NATIVE_INT, mspace1, fspace);
+
+  // Reset the selection for the file dataspace fid.
+  fspace.selectNone();
+
+  // close file
+  file->close();
+
+  // Close the dataset and the file.
+  delete dataset;
+  delete file;
+
+  return;
+}
+
+/** test for mapping from matrix to matrix
+ */
+void ProcessVulcanFastLog::exportTimeSeriesH5(
+    const std::__cxx11::string &h5name, const int size) {
+
+  // new and file
+  H5::H5File *file = new H5::H5File(h5name, H5F_ACC_TRUNC);
+
+  // create property list for a dataset and set up fill values
+  int fillvalue = 0;
+  H5::DSetCreatPropList plist;
+  plist.setFillValue(H5::PredType::NATIVE_INT, &fillvalue);
+
+  // create dataspace for the dataset in the file
+  const int FSPACE_DIM1 =
+      100; // Dimension sizes of the dataset as it is @ number of rows
+  const int FSPACE_DIM2 = 10; //  stored in the file @ number of columns
+
+H5:
+  hsize_t fdim[] = {FSPACE_DIM1, FSPACE_DIM2}; // dim sizes of ds (on disk)
+
+  const int FSPACE_RANK =
+      2; // Dataset rank as it is stored in the file RANK2 = 2D
+
+  // ***
+  DataSpace fspace(FSPACE_RANK, fdim);
+
+  // IS THIS PART NECESSARY?
+  /*
+   * Select hyperslab for the dataset in the file, using 3x2 blocks,
+   * (4,3) stride and (2,4) count starting at the position (0,1).
+   */
+  hsize_t start[2];  // Start of hyperslab
+  hsize_t stride[2]; // Stride of hyperslab
+  hsize_t count[2];  // Block count
+  hsize_t block[2];  // Block sizes
+  start[0] = 0;
+  start[1] = 0;
+  stride[0] = 1;
+  stride[1] = 3;
+  count[0] = 16;
+  count[1] = 1;
+  block[0] = 1;
+  block[1] = 3;
+  fspace.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // Create dataspace for the first dataset.
+  const int MSPACE_DIM1 = 8; // We will read dataset back from the file
+
+  const int MSPACE1_RANK = 1; // Rank of the first dataset in memory
+  const int MSPACE1_DIM = 50; // Dataset size in memory
+  hsize_t dim1[] = {
+      MSPACE1_DIM}; // Dimension size of the first dataset (in memory) */
+  DataSpace mspace1(MSPACE1_RANK, dim1);
+
+  const int MSPACE_RANK = 2; // Rank of the first dataset in memory
+
+  // Select hyperslab.
+  // We will use 48 elements of the vector buffer starting at the
+  // second element.  Selected elements are 1 2 3 . . . 48
+  start[0] = 0;
+  stride[0] = 1;
+  count[0] = 48;
+  block[0] = 1;
+  mspace1.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // write file
+  // int vector[MSPACE1_DIM]; // vector buffer for dset
+  int *vector = new int[size];
+
+  /*
+   * Buffer initialization.
+   */
+  vector[0] = vector[MSPACE1_DIM - 1] = -1;
+  for (int i = 1; i < MSPACE1_DIM - 1; i++)
+    vector[i] = i;
+
+  // Create dataset and write it into the file.
+  const H5std_string DATASET_NAME("Matrix in file");
+  DataSet *dataset = new DataSet(
+      file->createDataSet(DATASET_NAME, PredType::NATIVE_INT, fspace, plist));
+  dataset->write(vector, PredType::NATIVE_INT, mspace1, fspace);
+
+  // Reset the selection for the file dataspace fid.
+  fspace.selectNone();
+
+  // close file
+  file->close();
+
+  // Close the dataset and the file.
+  delete dataset;
+  delete file;
+
+  return;
+}
+
+//---
+void ProcessVulcanFastLog::exportTimeSeriesH5_raw(const std::string &h5name) {
+  // new and file
+  H5::H5File *file = new H5::H5File(h5name, H5F_ACC_TRUNC);
+
+  // create property list for a dataset and set up fill values
+  int fillvalue = 0;
+  H5::DSetCreatPropList plist;
+  plist.setFillValue(H5::PredType::NATIVE_INT, &fillvalue);
+
+  // create dataspace for the dataset in the file
+  const int FSPACE_DIM1 = 10; // Dimension sizes of the dataset as it is
+  const int FSPACE_DIM2 = 12; //  stored in the file
+
+H5:
+  hsize_t fdim[] = {FSPACE_DIM1, FSPACE_DIM2}; // dim sizes of ds (on disk)
+
+  const int FSPACE_RANK = 2; // Dataset rank as it is stored in the file
+  DataSpace fspace(FSPACE_RANK, fdim);
+
+  // IS THIS PART NECESSARY?
+  /*
+   * Select hyperslab for the dataset in the file, using 3x2 blocks,
+   * (4,3) stride and (2,4) count starting at the position (0,1).
+   */
+  hsize_t start[2];  // Start of hyperslab
+  hsize_t stride[2]; // Stride of hyperslab
+  hsize_t count[2];  // Block count
+  hsize_t block[2];  // Block sizes
+                     //    start[0]  = 0; start[1]  = 0;
+                     //    stride[0] = 4; stride[1] = 3;
+                     //    count[0]  = 2; count[1]  = 4;
+                     //    block[0]  = 3; block[1]  = 2;
+
+  start[0] = 0;
+  start[1] = 0;
+  stride[0] = 3;
+  stride[1] = 2;
+  count[0] = 2;
+  count[1] = 6;
+  block[0] = 3;
+  block[1] = 2;
+
+  fspace.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // file will be stride * block = 3, all filled
+
+  // Create dataspace for the first dataset.
+  const int MSPACE_DIM1 = 8; // We will read dataset back from the file
+
+  const int MSPACE1_RANK = 1; // Rank of the first dataset in memory
+  const int MSPACE1_DIM = 72; // Dataset size in memory
+  hsize_t dim1[] = {
+      MSPACE1_DIM}; // Dimension size of the first dataset (in memory) */
+  DataSpace mspace1(MSPACE1_RANK, dim1);
+
+  const int MSPACE_RANK = 2; // Rank of the first dataset in memory
+
+  // Select hyperslab.
+  // We will use 48 elements of the vector buffer starting at the
+  // second element.  Selected elements are 1 2 3 . . . 48
+  start[0] = 0;  // start from 0
+  stride[0] = 1; // stride[1] = 1;  // separate 1 from vertical (contiuous),
+                 // separate 2 from horizontal (continous)
+  count[0] = 72; // total number to write
+  block[0] = 1;  // block size 1, 2
+  mspace1.selectHyperslab(H5S_SELECT_SET, count, start, stride, block);
+
+  // write file
+  int vector[MSPACE1_DIM]; // vector buffer for dset
+                           /*
+                            * Buffer initialization.
+                            */
+  vector[0] = vector[MSPACE1_DIM - 1] = -5;
+  for (int i = 1; i < MSPACE1_DIM - 1; i++)
+    vector[i] = i;
+
+  // Create dataset and write it into the file.
+  const H5std_string DATASET_NAME("Matrix in file");
+  DataSet *dataset = new DataSet(
+      file->createDataSet(DATASET_NAME, PredType::NATIVE_INT, fspace, plist));
+  dataset->write(vector, PredType::NATIVE_INT, mspace1, fspace);
+
+  // Reset the selection for the file dataspace fid.
+  fspace.selectNone();
+
+  // close file
+  file->close();
+
+  // Close the dataset and the file.
+  delete dataset;
+  delete file;
 
   return;
 }

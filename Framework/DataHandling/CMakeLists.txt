@@ -44,6 +44,7 @@ set ( SRC_FILES
 	src/LoadEmptyInstrument.cpp
 	src/LoadEventNexus.cpp
 	src/LoadEventPreNexus2.cpp
+	src/ProcessVulcanFastLog.cpp
 	src/LoadFITS.cpp
 	src/LoadFullprofResolution.cpp
 	src/LoadGSASInstrumentFile.cpp
@@ -217,6 +218,7 @@ set ( INC_FILES
 	inc/MantidDataHandling/LoadDspacemap.h
 	inc/MantidDataHandling/LoadEmptyInstrument.h
 	inc/MantidDataHandling/LoadEventNexus.h
+	inc/MantidDataHandling/ProcessVulcanFastLog.h
 	inc/MantidDataHandling/LoadEventPreNexus2.h
 	inc/MantidDataHandling/LoadFITS.h
 	inc/MantidDataHandling/LoadFullprofResolution.h
