@@ -143,6 +143,7 @@ private:
   //----  Fast log processing related -----------------------------------------
   /// maximum special pixel ID for a certain channel of sample log signal
   size_t m_maxLogPixelID;
+  size_t m_minLogPixelID;
 
   //---------------------------------------------------------------------------
 
@@ -217,7 +218,7 @@ private:
 
   inline void fixPixelId(PixelType &pixel, uint32_t &period) const;
 
-  void procEvents(DataObjects::EventWorkspace_sptr &workspace);
+  void procEvents(DataObjects::EventWorkspace_sptr &event_workspace);
 
   void procEventsLinear(DataObjects::EventWorkspace_sptr &workspace,
                         std::vector<DataObjects::TofEvent> **arrayOfVectors,
@@ -238,7 +239,7 @@ private:
 
   API::MatrixWorkspace_sptr generateEventDistribtionWorkspace();
 
-  void createOutputWorkspace(const std::string event_filename);
+  void createEventWorkspace(const std::string event_filename);
 
   /// Processing the input properties for purpose of investigation
   void processInvestigationInputs();
@@ -247,6 +248,9 @@ private:
   void exportTimeSeriesH5(const std::string &h5name, const int size);
   void exportTimeSeriesH5_1D(const std::string &h5name);
   void exportTimeSeriesH5_raw(const std::string &h5name);
+
+  void processInputs();
+  void createOutputs();
 };
 }
 }

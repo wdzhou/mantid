@@ -1,4 +1,5 @@
 #include "MantidDataHandling/ProcessVulcanFastLog.h"
+#include "MantidAPI/AnalysisDataService.h"
 #include "MantidAPI/Axis.h"
 #include "MantidAPI/FileFinder.h"
 #include "MantidAPI/FileProperty.h"
@@ -307,7 +308,7 @@ void ProcessVulcanFastLog::init() {
   declareProperty("MinimumPixelID", EMPTY_INT(), mustBePositive,
                   "Minmum pixel IDs for the sample log to export.");
 
-  declareProperty("MaximumPixelID", EMPTY_INT(), mustBePositive,
+  declareProperty("MaximumPixelID", 1610780000, mustBePositive,
                   "Maximum pixel IDs for the sample log to export.");
 
   declareProperty(
@@ -350,6 +351,29 @@ void ProcessVulcanFastLog::init() {
   setPropertyGroup("EventRangeForLog", loggrp);
 }
 
+//------------------------------------------------------------------------------------------------
+/**
+ * @brief ProcessVulcanFastLog::processInputs
+ */
+void ProcessVulcanFastLog::processInputs() {
+  // TODO/ISSUE/NOW - Put it to some other more appropriate places
+  // FAST-LOG-FLAG
+  int max_pixel_id_i = getProperty("MaximumPixelID");
+  if (isEmpty(max_pixel_id_i))
+    max_pixel_id_i = 1610730000;
+  m_maxLogPixelID = static_cast<size_t>(max_pixel_id_i);
+
+  int min_pixel_id_i = getProperty("MinimumPixelID");
+  if (isEmpty(min_pixel_id_i))
+    min_pixel_id_i = detid_max + 1;
+  m_minLogPixelID = static_cast<size_t>(min_pixel_id_i);
+
+  if (m_minLogPixelID >= m_maxLogPixelID) {
+    g_log.error() << "detid max = " << detid_max << "\n";
+    throw std::runtime_error("Min and Max Pixel ID are not defined correctly.");
+  }
+}
+
 //----------------------------------------------------------------------------------------------
 /** Execute the algorithm
   * Procedure:
@@ -362,7 +386,7 @@ void ProcessVulcanFastLog::exec() {
   g_log.information("Executing Process Vulcan Fast Log");
 
   // test writing H5 file
-  exportTimeSeriesH5("/tmp/test.h5", 50);
+  // exportTimeSeriesH5("/tmp/test.h5", 50);
 
   // Process input properties
   // a. Check 'chunk' properties are valid, if set
@@ -393,6 +417,8 @@ void ProcessVulcanFastLog::exec() {
     }
   }
 
+  processInputs();
+
   g_log.warning() << "Processing investigration inputs."
                   << "\n";
   processInvestigationInputs();
@@ -411,23 +437,25 @@ void ProcessVulcanFastLog::exec() {
   g_log.warning() << "About to create output workspaces"
                   << "\n";
   prog->report("Creating output workspace");
-  createOutputWorkspace(event_filename);
+  createEventWorkspace(event_filename);
 
   // Process the events into pixels
   procEvents(localWorkspace);
 
   // Set output
-  this->setProperty<IEventWorkspace_sptr>(OUT_PARAM, localWorkspace);
+  //  this->setProperty<IEventWorkspace_sptr>(OUT_PARAM, localWorkspace);
+
+  createOutputs();
 
   // Fast frequency sample environment data
-  this->processImbedLogs();
+  //  this->processImbedLogs();
 
 } // exec()
 
 //------------------------------------------------------------------------------------------------
 /** Create and set up output Event Workspace
   */
-void ProcessVulcanFastLog::createOutputWorkspace(
+void ProcessVulcanFastLog::createEventWorkspace(
     const std::string event_filename) {
 
   // TODO/NOW/ISSUE/ -- create vector
@@ -686,7 +714,7 @@ inline void ProcessVulcanFastLog::fixPixelId(PixelType &pixel,
   * @param workspace :: EventWorkspace to write to.
   */
 void ProcessVulcanFastLog::procEvents(
-    DataObjects::EventWorkspace_sptr &workspace) {
+    DataObjects::EventWorkspace_sptr &event_workspace) {
   //-------------------------------------------------------------------------
   // Initialize statistic counters
   //-------------------------------------------------------------------------
@@ -703,11 +731,13 @@ void ProcessVulcanFastLog::procEvents(
   size_t loadBlockSize = Mantid::Kernel::DEFAULT_BLOCK_SIZE * 2;
   size_t numBlocks = (max_events + loadBlockSize - 1) / loadBlockSize;
 
+  g_log.notice() << "Number of blocks: " << numBlocks << "\n";
+
   m_timeBlockVector.resize(numBlocks);
   m_valueBlockVector.resize(numBlocks);
 
   // We want to pad out empty pixels.
-  const auto &detectorInfo = workspace->detectorInfo();
+  const auto &detectorInfo = event_workspace->detectorInfo();
   const auto &detIDs = detectorInfo.detectorIDs();
 
   // Determine processing mode
@@ -735,6 +765,8 @@ void ProcessVulcanFastLog::procEvents(
     if (detID > detid_max)
       detid_max = detID;
 
+  g_log.warning() << "Dector ID max = " << detid_max << "\n";
+
   // For slight speed up
   loadOnlySomeSpectra = (!this->spectra_list.empty());
 
@@ -755,7 +787,7 @@ void ProcessVulcanFastLog::procEvents(
       if (!loadOnlySomeSpectra ||
           (spectraLoadMap.find(detIDs[i]) != spectraLoadMap.end())) {
         this->pixel_to_wkspindex[detIDs[i]] = workspaceIndex;
-        EventList &spec = workspace->getSpectrum(workspaceIndex);
+        EventList &spec = event_workspace->getSpectrum(workspaceIndex);
         spec.setDetectorID(detIDs[i]);
         spec.setSpectrumNo(spectrumNumber);
         ++workspaceIndex;
@@ -798,11 +830,11 @@ void ProcessVulcanFastLog::procEvents(
         prog->report("Creating Partial Workspace");
         // Create a partial workspace, copy all the spectra numbers and stuff
         // (no actual events to copy though).
-        partWS = workspace->clone();
+        partWS = event_workspace->clone();
         // Push it in the array
         partWorkspaces[i] = partWS;
       } else
-        partWS = workspace;
+        partWS = event_workspace;
 
       // Allocate the buffers
       buffers[i] = new DasEvent[loadBlockSize];
@@ -844,7 +876,7 @@ void ProcessVulcanFastLog::procEvents(
         threadNum = PARALLEL_THREAD_NUMBER;
         ws = partWorkspaces[threadNum];
       } else
-        ws = workspace;
+        ws = event_workspace;
 
       // Get the buffer (for this thread)
       DasEvent *event_buffer = buffers[threadNum];
@@ -899,17 +931,20 @@ void ProcessVulcanFastLog::procEvents(
     //-------------------------------------------------------------------------
     // MERGE WORKSPACES BACK TOGETHER
     //-------------------------------------------------------------------------
+    // FIXME/NOW/LATER - Temporarily disable parallel processing
+    parallelProcessing = false;
     if (parallelProcessing) {
       PARALLEL_START_INTERUPT_REGION
-      prog->resetNumSteps(workspace->getNumberHistograms(), 0.8, 0.95);
+      prog->resetNumSteps(event_workspace->getNumberHistograms(), 0.8, 0.95);
 
       // Merge all workspaces, index by index.
       PARALLEL_FOR_NO_WSP_CHECK()
-      for (int iwi = 0; iwi < int(workspace->getNumberHistograms()); iwi++) {
+      for (int iwi = 0; iwi < int(event_workspace->getNumberHistograms());
+           iwi++) {
         size_t wi = size_t(iwi);
 
         // The output event list.
-        EventList &el = workspace->getSpectrum(wi);
+        EventList &el = event_workspace->getSpectrum(wi);
         el.clear(false);
 
         // How many events will it have?
@@ -951,17 +986,20 @@ void ProcessVulcanFastLog::procEvents(
     // Finalize loading
     //-------------------------------------------------------------------------
     prog->report("Setting proton charge");
-    this->setProtonCharge(workspace);
+    this->setProtonCharge(event_workspace);
     g_log.debug() << tim << " to set the proton charge log."
                   << "\n";
 
     // Make sure the MRU is cleared
-    workspace->clearMRU();
+    event_workspace->clearMRU();
 
     // Now, create a default X-vector for histogramming, with just 2 bins.
-    auto axis = HistogramData::BinEdges{shortest_tof - 1, longest_tof + 1};
-    workspace->setAllX(axis);
-    this->pixel_to_wkspindex.clear();
+    if (false) {
+      // FIXME/NOW - since there is no event, then this step is skipped
+      auto axis = HistogramData::BinEdges{shortest_tof - 1, longest_tof + 1};
+      event_workspace->setAllX(axis);
+      this->pixel_to_wkspindex.clear();
+    }
 
     /* Disabled! Final process on wrong detector id events
     for (size_t vi = 0; vi < this->wrongdetid_abstimes.size(); vi ++){
@@ -997,6 +1035,18 @@ void ProcessVulcanFastLog::procEvents(
       g_log.notice() << "Pixel " << tmpid << ":  Total number of events = "
                      << this->wrongdetid_pulsetimes[vindex].size() << '\n';
     }
+
+    //-------------------------------------------------------------------------
+    // Information about logs
+    //-------------------------------------------------------------------------
+    g_log.notice() << "Number of blocks = " << m_timeBlockVector.size() << ", "
+                   << m_valueBlockVector.size() << "\n";
+    size_t num_entries = 0;
+    for (size_t iblock = 0; iblock < m_timeBlockVector.size(); ++iblock)
+      num_entries += m_timeBlockVector[iblock].size();
+    g_log.notice() << "Total " << num_entries << " entries"
+                   << "\n";
+
 } // End of procEvents
 
 //----------------------------------------------------------------------------------------------
@@ -1049,14 +1099,8 @@ void ProcessVulcanFastLog::procEventsLinear(
 
   size_t wrong_pixel_counter = 0;
   // TODO/ISSUE/NOW - Make it flexible!
-  size_t max_output_wrong_pixels = 2000;
-
-  // TODO/ISSUE/NOW - Put it to some other more appropriate places
-  // FAST-LOG-FLAG
-  int max_pixel_id_i = getProperty("MaximumPixelID");
-  if (isEmpty(max_pixel_id_i))
-    max_pixel_id_i = 1610730000;
-  m_maxLogPixelID = static_cast<size_t>(max_pixel_id_i);
+  size_t log_output_counter = 0;
+  size_t max_output_log_entries = 2000;
 
   size_t num_signal_block = 0; // number of signal counts in a block
   for (size_t i = 0; i < current_event_buffer_size; i++) {
@@ -1104,22 +1148,12 @@ void ProcessVulcanFastLog::procEventsLinear(
       }
 
       // some debug output
-      // TODO/ISSUE/NOW... RESUME FROM HERE!
-      ...... blabla
-
-          if (dbprint && wrong_pixel_counter < max_output_wrong_pixels &&
-              pid < m_maxLogPixelID) { //  #           pid > 1610780000
+      if (dbprint && islog & log_output_counter < max_output_log_entries) {
         g_log.warning() << "Log ID " << pid << "\n";
+      } else if (iswrongdetid) {
         ++wrong_pixel_counter;
       }
-      else if (dbprint && wrong_pixel_counter >= max_output_wrong_pixels) {
-        std::stringstream err_msg;
-        err_msg << "Debug stop for understanding event-based sample logs.  "
-                   "Wrong Pixel counter = "
-                << wrong_pixel_counter;
-        throw std::runtime_error(err_msg.str());
-      }
-    } // PID
+    } // END-IF (pid is not detector IDs)
 
     // Now check if this pid we want to load.
     if (loadOnlySomeSpectra && !iswrongdetid) {
@@ -1132,7 +1166,7 @@ void ProcessVulcanFastLog::procEventsLinear(
       }
     }
 
-    // Upon this point, only 'good' events are left to work on
+    // Upon this point, only 'good' events and log events are left to work on
 
     // Pulse: Find the pulse time for this event index
     if (pulse_i < numPulses - 1) {
@@ -1155,7 +1189,7 @@ void ProcessVulcanFastLog::procEventsLinear(
     // TOF
     double tof = static_cast<double>(temp.tof) * TOF_CONVERSION;
 
-    if (!iswrongdetid) {
+    if (!iswrongdetid && !islog) {
       // Regular event that is belonged to a defined detector
       // Find the overall max/min tof
       if (tof < local_shortest_tof)
@@ -1168,8 +1202,14 @@ void ProcessVulcanFastLog::procEventsLinear(
       // But should be faster as a bunch of these calls were cached.
       arrayOfVectors[pid]->emplace_back(tof, pulsetime);
       ++local_num_good_events;
+    } else if (islog) {
+      //  Special events
+      Kernel::DateAndTime log_time(pulsetime.totalNanoseconds() +
+                                   static_cast<int64_t>(tof * 1000));
+      log_time_vector.push_back(log_time);
+      log_value_vector.push_back(pid);
     } else {
-      // Special events/Wrong detector id
+      // Wrong detector id
       // i.  get/add index of the entry in map
       std::map<PixelType, size_t>::iterator it;
       it = local_pidindexmap.find(pid);
@@ -1484,6 +1524,50 @@ void ProcessVulcanFastLog::processInvestigationInputs() {
   return;
 }
 
+//----------------------------------------------------------------------------------------------
+void ProcessVulcanFastLog::createOutputs() {
+  std::vector<double> vecx;
+  std::vector<double> vecy;
+
+  for (size_t iblock = 0; iblock < 100; ++iblock) {
+
+    // create smaller workspace
+    MatrixWorkspace_sptr blockws = WorkspaceFactory::Instance().create(
+        "Workspace2D", 1, m_timeBlockVector[iblock].size(),
+        m_valueBlockVector[iblock].size());
+
+    // add entries
+    for (size_t ientry = 0; ientry < m_timeBlockVector[iblock].size();
+         ++ientry) {
+      vecx.push_back(static_cast<double>(
+          m_timeBlockVector[iblock][ientry].totalNanoseconds()));
+      vecy.push_back(static_cast<double>(m_valueBlockVector[iblock][ientry]));
+
+      blockws->mutableX(0)[ientry] = static_cast<double>(
+          m_timeBlockVector[iblock][ientry].totalNanoseconds());
+      blockws->mutableY(0)[ientry] =
+          static_cast<double>(m_valueBlockVector[iblock][ientry]);
+    }
+
+    // add output
+    std::stringstream wsnamess;
+    wsnamess << "log_" << iblock;
+    std::string wsname(wsnamess.str());
+
+    AnalysisDataService::Instance().addOrReplace(wsname, blockws);
+  }
+
+  MatrixWorkspace_sptr logws = WorkspaceFactory::Instance().create(
+      "Workspace2D", 1, vecx.size(), vecy.size());
+  for (size_t i = 0; i < logws->histogram(0).size(); ++i) {
+    logws->mutableX(0)[i] = vecx[i];
+    logws->mutableY(0)[i] = vecy[i];
+  }
+
+  setProperty(OUT_PARAM, logws);
+}
+
+//----------------------------------------------------------------------------------------------
 using namespace H5;
 
 //----------------------------------------------------------------------------------------------
