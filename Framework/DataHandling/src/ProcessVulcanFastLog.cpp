@@ -308,13 +308,15 @@ void ProcessVulcanFastLog::init() {
   declareProperty("MinimumPixelID", EMPTY_INT(), mustBePositive,
                   "Minmum pixel IDs for the sample log to export.");
 
-  declareProperty("MaximumPixelID", 1610780000, mustBePositive,
+  declareProperty("MaximumPixelID", EMPTY_INT(), mustBePositive,
                   "Maximum pixel IDs for the sample log to export.");
 
   declareProperty(
       Kernel::make_unique<WorkspaceProperty<MatrixWorkspace>>(
           OUT_PARAM, "", Direction::Output),
       "The name of the workspace that contains the fast sample log.");
+
+  // TODO - Define workspace 2
 
   auto mustBeNonNegative = boost::make_shared<BoundedValidator<int>>();
   mustBeNonNegative->setLower(0);
@@ -1565,6 +1567,15 @@ void ProcessVulcanFastLog::createOutputs() {
   }
 
   setProperty(OUT_PARAM, logws);
+}
+
+//----------------------------------------------------------------------------------------------
+// TODO - Create 2nd outputs including the converted PIXEL ID and relative time in nano seconds
+//        Workspaces are generated per N (input properties) blocks and output workspaces are
+//        grouped
+void blabla()
+{
+
 }
 
 //----------------------------------------------------------------------------------------------
